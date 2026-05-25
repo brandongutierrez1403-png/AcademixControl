@@ -10,7 +10,7 @@ CORS(app)
 # 1. OBTENER LA URL DE CONEXIÓN DE RENDER
 # Reemplaza esta cadena de texto por tu "External Connection URI" que te dio Render.
 # Se recomienda usar os.environ por seguridad, pero puedes pegarla directo aquí para probar.
-DATABASE_URL = os.environ.get('postgresql://academix_db_r3rb_user:rD2KWIPWfbGz1mEzoToh3LGzjFIHMfz8@dpg-d8a7n8ugvqtc73ck5iu0-a.oregon-postgres.render.com/academix_db_r3rb')
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
 def conectar_db():
     # Nos conectamos a Postgres usando la URI de Render
