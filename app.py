@@ -7,21 +7,24 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# 1. OBTENER LA URL DE CONEXIÓN DE RENDER
-# Reemplaza esta cadena de texto por tu "External Connection URI" que te dio Render.
-# Se recomienda usar os.environ por seguridad, pero puedes pegarla directo aquí para probar.
+# Obtener la URL de conexión desde las variables de entorno de Render
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
 def conectar_db():
-    # Nos conectamos a Postgres usando la URI de Render
-    conn = psycopg2.connect(DATABASE_URL)
-    return conn
+    try:
+        # Aseguramos que la URL use el formato correcto para psycopg2
+        conn_str = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        return psycopg2.connect(conn_str)
+    except Exception as e:
+        print(f"Error crítico de conexión a DB: {e}")
+        return None
 
 def init_db():
     conn = conectar_db()
+    if not conn: return
     cursor = conn.cursor()
     
-    # Tabla de Usuarios (En Postgres usamos SERIAL en lugar de AUTOINCREMENT)
+    # Crear tablas necesarias para Academix
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -30,7 +33,6 @@ def init_db():
         )
     ''')
     
-    # Tabla de Tareas (Ajustada a la sintaxis de Postgres)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tasks (
             id SERIAL PRIMARY KEY,
@@ -49,28 +51,25 @@ def init_db():
     conn.commit()
     cursor.close()
     conn.close()
-    print("✅ Base de datos PostgreSQL inicializada en la nube")
+    print("✅ Base de datos inicializada correctamente")
 
-# Inicializamos las tablas al arrancar el servidor
+# Inicializar tablas al arrancar
 init_db()
+
+# --- RUTAS ---
 
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
-    if not data or 'email' not in data or 'password' not in data:
-        return jsonify({"error": "Datos incompletos"}), 400
     try:
         conn = conectar_db()
         cursor = conn.cursor()
-        # En Postgres se usa %s en lugar de ? para pasar parámetros
         cursor.execute('INSERT INTO users (email, password) VALUES (%s, %s)', 
                      (data['email'].lower().strip(), data['password']))
         conn.commit()
         cursor.close()
         conn.close()
         return jsonify({"status": "success", "message": "Usuario registrado"}), 201
-    except psycopg2.errors.UniqueViolation:
-        return jsonify({"error": "El correo ya existe"}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -78,7 +77,6 @@ def register():
 def login():
     data = request.json
     conn = conectar_db()
-    # Usamos RealDictCursor para que nos devuelva el resultado como un diccionario idéntico a sqlite.Row
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute('SELECT * FROM users WHERE email = %s AND password = %s', 
                  (data['email'].lower().strip(), data['password']))
@@ -87,17 +85,12 @@ def login():
     conn.close()
     
     if user:
-        return jsonify({
-            "status": "success",
-            "user": {"id": user['id'], "email": user['email']}
-        })
+        return jsonify({"status": "success", "user": {"id": user['id'], "email": user['email']}})
     return jsonify({"status": "error", "message": "Credenciales inválidas"}), 401
 
 @app.route('/tasks', methods=['GET'])
 def get_tasks():
     user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"error": "Falta user_id"}), 400
     conn = conectar_db()
     cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute('SELECT * FROM tasks WHERE user_id = %s', (user_id,))
@@ -112,7 +105,6 @@ def add_task():
     try:
         conn = conectar_db()
         cursor = conn.cursor()
-        # RETURNING id nos ayuda a saber qué ID autogeneró Postgres de forma segura
         cursor.execute('''
             INSERT INTO tasks (user_id, title, subject, teacher, dueDate, dueDateTime, 
                              reminderInterval, description, completed)
@@ -128,39 +120,20 @@ def add_task():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/tasks/<int:id>', methods=['PUT'])
-def update_task(id):
-    data = request.json
-    try:
-        conn = conectar_db()
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE tasks SET title=%s, subject=%s, teacher=%s, dueDate=%s, dueDateTime=%s, 
-            reminderInterval=%s, description=%s, completed=%s WHERE id=%s''',
-            (data.get('title'), data.get('subject'), data.get('teacher'), 
-             data.get('dueDate'), data.get('dueDateTime'), data.get('reminderInterval'), 
-             data.get('description'), data.get('completed'), id))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/tasks/<int:id>', methods=['DELETE'])
-def delete_task(id):
-    try:
-        conn = conectar_db()
-        cursor = conn.cursor()
+@app.route('/tasks/<int:id>', methods=['PUT', 'DELETE'])
+def manage_task(id):
+    conn = conectar_db()
+    cursor = conn.cursor()
+    if request.method == 'PUT':
+        data = request.json
+        cursor.execute('''UPDATE tasks SET title=%s, completed=%s WHERE id=%s''',
+                       (data.get('title'), data.get('completed'), id))
+    else:
         cursor.execute('DELETE FROM tasks WHERE id=%s', (id,))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return jsonify({"status": "success"})
 
-# Modificación clave: app.run adaptado con puerto dinámico para Render
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+# NOTA: Gunicorn se encargará de ejecutar esto en Render, 
+# por lo que no es necesario el if __name__ == '__main__' con app.run aquí.
